@@ -211,7 +211,7 @@ std::vector<cv::Mat> Tracker::track(vector<TrackRect> t){
 		cout<<"frame added!"<<endl;
 		v.push_back(f); // TODO uncomment line
 		imshow("Video OUT", f); // TODO comment line
-		if(waitKey(16) == 'q')
+		if(waitKey(0.5*FRAMERATE) == 'q')
 			break;
 	}
 	return v;
