@@ -83,11 +83,6 @@ std::vector<TrackRect> Tracker::init(){
 		vector<KeyPoint> obj_keypoints;
 		orb->detect(obj, obj_keypoints);
 
-		// pick corners
-		//namedWindow("Keypoints", WINDOW_NORMAL);
-		//imshow("Keypoints", obj);
-		//waitKey();
-
 		// compute keypoints' descriptors
 		Mat obj_descriptors;
 		orb->compute(obj, obj_keypoints, obj_descriptors);
@@ -98,12 +93,22 @@ std::vector<TrackRect> Tracker::init(){
 		vector<vector<DMatch>> knn_matches;
 		matcher.knnMatch(obj_descriptors, frame_descriptors, knn_matches, K_MATCH);
 
+		//find min distance
+		float min_distance = FLT_MAX;
+		for(auto& v : knn_matches){
+			// skip if no match
+			if(v.empty()) continue;
+
+			if(min_distance > v[0].distance)
+				min_distance = v[0].distance;
+		}
+
 		// extract points from knn_matches
 		Matching points;
 		vector<DMatch> matches;
 		for(auto& v : knn_matches){
-			// skip if no match
-			if(v.empty()) continue;
+			// skip if no match or bad matches
+			if(v.empty() || v[0].distance > RATIO*min_distance ) continue;
 
 			// save match
 			matches.push_back(v.at(0));
@@ -206,7 +211,8 @@ std::vector<cv::Mat> Tracker::track(vector<TrackRect> t){
 		cout<<"frame added!"<<endl;
 		v.push_back(f); // TODO uncomment line
 		imshow("Video OUT", f); // TODO comment line
-		waitKey(16);
+		if(waitKey(16) == 'q')
+			break;
 	}
 	return v;
 }
