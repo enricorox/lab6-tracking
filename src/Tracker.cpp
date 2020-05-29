@@ -39,20 +39,13 @@ Tracker::Tracker(std::string path_video, std::string path_objs){
 }
 
 std::vector<cv::Mat> Tracker::computeTracking(){
-	vector<TrackRect> t = init();
-	vector<Mat> v = track(t);
-	return v;
+	vector<Matching> features = init();
+	vector<Mat> video = track(features);
+	return video;
 }
 
-std::vector<TrackRect> Tracker::init(){
-	vector<TrackRect> result;
-
-	// build rect vectors
-	Rect2i rects[4];
-	rects[0] = Rect2i(Vec2i(X_TOP1, Y_TOP1), Vec2i(X_BOTTOM1, Y_BOTTOM1));
-	rects[1] = Rect2i(Vec2i(X_TOP2, Y_TOP2), Vec2i(X_BOTTOM2, Y_BOTTOM2));
-	rects[2] = Rect2i(Vec2i(X_TOP3, Y_TOP3), Vec2i(X_BOTTOM3, Y_BOTTOM3));
-	rects[3] = Rect2i(Vec2i(X_TOP4, Y_TOP4), Vec2i(X_BOTTOM4, Y_BOTTOM4));
+std::vector<Matching> Tracker::init(){
+	vector<Matching> result;
 
 	// extract first frame
 	Mat frame = src_video.at(0);
@@ -66,14 +59,6 @@ std::vector<TrackRect> Tracker::init(){
 	Mat frame_descriptors;
 	orb->compute(frame, frame_keypoints, frame_descriptors);
 
-	// draw keypoint
-	Mat key_im;
-	drawKeypoints(frame, frame_keypoints, key_im);
-
-	// show keypoints
-	//imshow("Keypoints", key_im);
-	//waitKey();
-
 	// find object features and matches
 	int obj_counter = 0; // object counter
 	for(auto& obj : obj_img){
@@ -86,7 +71,6 @@ std::vector<TrackRect> Tracker::init(){
 		// compute keypoints' descriptors
 		Mat obj_descriptors;
 		orb->compute(obj, obj_keypoints, obj_descriptors);
-
 
 		// find matches
 		BFMatcher matcher = BFMatcher(NORM_HAMMING, true);
@@ -104,6 +88,7 @@ std::vector<TrackRect> Tracker::init(){
 		}
 
 		// extract points from knn_matches
+		// and refine match with ratio test
 		Matching points;
 		vector<DMatch> matches;
 		for(auto& v : knn_matches){
@@ -125,13 +110,13 @@ std::vector<TrackRect> Tracker::init(){
 			points.video_features.push_back(frame_p);
 		}
 
-		cout<<"Number of good matches with object "<<obj_counter<<": "<<points.obj_features.size()<<endl;
+		cout<<"Number of matches with object "<<obj_counter<<": "<<points.obj_features.size()<<endl;
 
-		// apply RANSAC
+		// find homography
 		Mat H, mask;
 		H = findHomography(points.obj_features, points.video_features, RANSAC, THRESHOLD, mask);
 
-		// refine matches
+		// refine matches with RANSAC mask
 		Matching good_matches;
 		for(int i = 0; i < points.obj_features.size(); i++)
 			if(mask.at<bool>(i)){
@@ -140,19 +125,18 @@ std::vector<TrackRect> Tracker::init(){
 			}
 		cout<<"Saved only "<<good_matches.obj_features.size()<<" matches"<<endl;
 
-		// draw rect on obj
-		Vec2f p1 = Vec2i(rects[obj_counter].x, rects[obj_counter].y);
-		Vec2f p2 = Vec2i(rects[obj_counter].x, rects[obj_counter].y + rects[obj_counter].height);
-		Vec2f p3 = Vec2i(rects[obj_counter].x + rects[obj_counter].width, rects[obj_counter].y + rects[obj_counter].height);
-		Vec2f p4 = Vec2i(rects[obj_counter].x + rects[obj_counter].width, rects[obj_counter].y);
-		Mat obj_rect = drawRect(obj, colors[obj_counter], THICKNESS, p1, p2, p3, p4);
+		// save points
+		result.push_back(good_matches);
 
-		// draw rect on frame
-		Vec2f q1 = project(H, p1);
-		Vec2f q2 = project(H, p2);
-		Vec2f q3 = project(H, p3);
-		Vec2f q4 = project(H, p4);
-		Mat frame_rect = drawRect(frame, colors[obj_counter], THICKNESS, q1, q2, q3, q4);
+		// ---draw rect on obj---
+		// extract corners
+		vector<Point2f> corners = extractCorners(cv::Rect2f(two_corners[obj_counter][0], two_corners[obj_counter][1]));
+		Mat obj_rect = drawRect(obj, colors[obj_counter], THICKNESS, corners);
+
+		// ---draw rect on frame---
+		// project corners
+		vector<Point2f> projected_corners = project(H, corners);
+		Mat frame_rect = drawRect(frame, colors[obj_counter], THICKNESS, projected_corners);
 
 		// draw matches
 		Mat drawn_matches_image;
@@ -164,68 +148,144 @@ std::vector<TrackRect> Tracker::init(){
 		sprintf(filename, "%d_matches.png", obj_counter);
 		imwrite(filename, drawn_matches_image);
 
-		// save points
-		TrackRect t;
-		t.p1 = q1;
-		t.p2 = q2;
-		t.p3 = q3;
-		t.p4 = q4;
-		result.push_back(t);
-
 		// increase counter
 		obj_counter++;
 	}
 	return result;
 }
 
-std::vector<cv::Mat> Tracker::track(vector<TrackRect> t){
-	vector<Mat> v;
-	vector<vector<Point2f>> prevPts(t.size()), nextPts(t.size());
+std::vector<cv::Mat> Tracker::track(vector<Matching> points_vecs){
+	vector<Mat> video;
+	vector<vector<Point2f>> next_frame_pts(points_vecs.size());
+	vector<vector<Point2f>> obj_pts(points_vecs.size());
+
+	// test input (frame)
+	/*
+	int myradius=5;
+	for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++)
+		for (int i=0;i<points_vecs[oIdx].video_features.size();i++)
+			circle(src_video[0],Point(points_vecs[oIdx].video_features[i].x,points_vecs[oIdx].video_features[i].y),
+					myradius,colors[oIdx],-1,8,0);
+	namedWindow("frame keypoints", WINDOW_NORMAL);
+	imshow("frame keypoints", src_video[0]);
+	waitKey(0);
+	// test input (object)
+	for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++){
+		for (int i=0;i<points_vecs[oIdx].video_features.size();i++)
+			circle(obj_img[oIdx], Point(points_vecs[oIdx].obj_features[i].x, points_vecs[oIdx].obj_features[i].y),
+					myradius , colors[oIdx], -1, 8, 0);
+		namedWindow("object keypoints", WINDOW_NORMAL);
+		imshow("object keypoints", obj_img[oIdx]);
+		waitKey(0);
+	}
+
+	*/
 
 	// prepare first frame
 	Mat f = src_video[0];
-	for(int oIdx = 0; oIdx < t.size(); oIdx++){
-		nextPts[oIdx].push_back(t[oIdx].p1);
-		nextPts[oIdx].push_back(t[oIdx].p2);
-		nextPts[oIdx].push_back(t[oIdx].p3);
-		nextPts[oIdx].push_back(t[oIdx].p4);
-		f = drawRect(f, colors[oIdx], THICKNESS, nextPts[oIdx]);
+	for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++){
+		// initialize points
+		next_frame_pts[oIdx] = points_vecs[oIdx].video_features;
+		obj_pts[oIdx] = points_vecs[oIdx].obj_features;
+
+		// find homography
+		Mat H = findHomography(obj_pts[oIdx], next_frame_pts[oIdx]);
+
+		// compute static corners
+		vector<Point2f> corners = extractCorners(cv::Rect2f(two_corners[oIdx][0], two_corners[oIdx][1]));
+
+		// project corners and draw rectangle
+		f = drawRect(f, colors[oIdx], THICKNESS, project(H, corners));
 	}
-	v.push_back(f);
+	// save frame
+	video.push_back(f);
 
+	// show frame
+	imshow("Video OUT", f);
+	waitKey(0);
 
-
+	int delay = FRAMERATE;
+	bool quit = false;
 	// for every frame
-	for(int fIdx = 1; fIdx < src_video.size(); fIdx++){
-		// update rects
-		prevPts = nextPts;
+	for(int fIdx = 1; (fIdx < src_video.size()) && !quit; fIdx++){
+		// update points
+		vector<vector<Point2f>> prev_frame_pts(next_frame_pts);
 
 		// for every object
 		Mat f = src_video[fIdx];
-		for(int oIdx = 0; oIdx < t.size(); oIdx++){
+		for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++){
 			// compute flow
-			Mat status, err;
-			calcOpticalFlowPyrLK(src_video[fIdx-1], src_video[fIdx], prevPts[oIdx], nextPts[oIdx], status, err);
-			f = drawRect(f, colors[oIdx], THICKNESS, nextPts[oIdx]);
+	        vector<uchar> status;
+	        vector<float> err;
+	        next_frame_pts[oIdx].clear();
+			calcOpticalFlowPyrLK(src_video[fIdx-1], src_video[fIdx], prev_frame_pts[oIdx], next_frame_pts[oIdx],
+					status, err, Size(WIN_SIZE), MAX_PYR_LV);
+
+			// remove points not found
+			vector<Point2f> tmp_obj, tmp_frame;
+			for(int i = 0; i < next_frame_pts.size(); i++)
+				if(status.at(i)){
+					tmp_frame.push_back(next_frame_pts[oIdx][i]);
+					tmp_obj.push_back(obj_pts[oIdx][i]);
+				}else{
+					cout<<"Warning: Point "<<i<<" not found by Lukas-Kanade!"<<endl;
+				}
+
+			// update points
+			next_frame_pts[oIdx] = tmp_frame;
+			obj_pts[oIdx] = tmp_obj;
+
+			// find homography
+			vector<char> mask;
+			Mat H = findHomography(obj_pts[oIdx], next_frame_pts[oIdx], RANSAC, THRESHOLD_DYN, mask);
+
+			// refine points with ransac mask
+			vector<Point2f> tmp2_obj, tmp2_frame;
+			for(int i = 0; i < next_frame_pts.size(); i++)
+				if(mask[i]){
+					tmp2_frame.push_back(next_frame_pts[oIdx][i]);
+					tmp2_obj.push_back(obj_pts[oIdx][i]);
+				}else{
+					cout<<"Warning: Point "<<i<<" discarded by RANSAC!"<<endl;
+				}
+
+			// update points
+			next_frame_pts[oIdx] = tmp2_frame;
+			obj_pts[oIdx] = tmp2_obj;
+
+			if(next_frame_pts[oIdx].empty()){
+				cout<<"Error: There are no points left to feed Lukas-Kanade!"<<endl;
+				exit(-1);
+			}
+
+			vector<Point2f> corners = extractCorners(cv::Rect2f(two_corners[oIdx][0], two_corners[oIdx][1]));
+			f = drawRect(f, colors[oIdx], THICKNESS, project(H, corners));
 		}
-		cout<<"frame added!"<<endl;
-		v.push_back(f); // TODO uncomment line
-		imshow("Video OUT", f); // TODO comment line
-		if(waitKey(0.5*FRAMERATE) == 'q')
-			break;
+
+		// save frame
+		video.push_back(f);
+
+		// show frame
+		imshow("Video OUT", f);
+		switch(waitKey(delay)){
+		case 'q': quit = true; break; // q --> exit
+		case 'f': delay = 0; break; // f--> frame by frame
+		case ' ': delay = FRAMERATE; // space bar --> reset delay
+		}
 	}
-	return v;
+
+	return video;
 }
 
-cv::Mat drawRect(Mat img, Scalar color, int thickness, Vec2f pt1, Vec2f pt2, Vec2f pt3, Vec2f pt4){
+cv::Mat drawRect(Mat img, Scalar color, int thickness, Point2f pt1, Point2f pt2, Point2f pt3, Point2f pt4){
 	Mat result;
 	img.copyTo(result);
 
 	// convert to Point2i
-	Vec2i p1 = static_cast<Point2i>(pt1);
-	Vec2i p2 = static_cast<Point2i>(pt2);
-	Vec2i p3 = static_cast<Point2i>(pt3);
-	Vec2i p4 = static_cast<Point2i>(pt4);
+	Point2i p1 = static_cast<Point2i>(pt1);
+	Point2i p2 = static_cast<Point2i>(pt2);
+	Point2i p3 = static_cast<Point2i>(pt3);
+	Point2i p4 = static_cast<Point2i>(pt4);
 	// draw lines
 	line(result, p1, p2, color, thickness);
 	line(result, p2, p3, color, thickness);
@@ -243,24 +303,42 @@ cv::Mat drawRect(Mat img, Scalar color, int thickness, vector<Point2f> points){
 	return drawRect(img, color, thickness, points[0], points[1], points[2], points[3]);
 }
 
-Vec2i project(Mat H, Vec2f p){
-	Mat mul;
-
+Point2f project(Mat H, Point2f p){
+	if(H.empty()){
+		cout<<"Homography matrix is empty!"<<endl;
+		exit(-1);
+	}
 	// add one component
-	Vec3f q(p.val[0], p.val[1], 1);
+	Vec3f q(p.x, p.y, 1);
 
 	// convert to floating point
 	H.convertTo(H, CV_32FC1);
 
 	// matrix multiplication
-	mul = H*q;
-	cout<<"Projected point:"<<endl<<mul<<endl<<endl;
+	Mat mul = H*q;
+	//cout<<"Projected point:"<<endl<<mul<<endl<<endl;
 
 	// discard last component (should be 1)
-	Vec2i result = Vec2i(
+	Point2f result = Point2f(
 			(int) mul.at<float>(0,0),
 			(int) mul.at<float>(0,1)
 	);
 
 	return result;
+}
+
+vector<Point2f> project(Mat H, vector<Point2f> vecs){
+	vector<Point2f> result;
+	for(auto& v : vecs)
+		result.push_back(project(H,v));
+	return result;
+}
+
+vector<Point2f> extractCorners(Rect2f r){
+	Point2f p1(r.x, r.y);
+	Point2f p2(r.x, r.y + r.height);
+	Point2f p3(r.x + r.width, r.y + r.height);
+	Point2f p4(r.x + r.width, r.y);
+
+	return {p1,p2,p3,p4};
 }
