@@ -33,13 +33,102 @@ Tracker::Tracker(std::string path_video, std::string path_objs){
 	cout<<"Read "<<src_video.size()<<" frames."<<endl;
 }
 
-std::vector<cv::Mat> Tracker::computeTracking(){
-	vector<Matching> features = init();
-	vector<Mat> video = track(features);
-	return video;
+void Tracker::showTracking(){
+	vector<Matching> points_vecs = findFeatures();
+
+    vector<vector<Point2f>> next_frame_pts(points_vecs.size());
+    vector<vector<Point2f>> obj_pts(points_vecs.size());
+
+    // prepare first frame
+    Mat first = src_video[0].clone();
+    for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++){
+        // initialize points
+        next_frame_pts[oIdx] = points_vecs[oIdx].video_features;
+        obj_pts[oIdx] = points_vecs[oIdx].obj_features;
+
+        // find homography
+        Mat H = findHomography(obj_pts[oIdx], next_frame_pts[oIdx]);
+
+        // compute static corners
+        vector<Point2f> corners = extractCorners(cv::Rect2f(two_corners[oIdx][0], two_corners[oIdx][1]));
+
+        // project corners and draw rectangle
+        first = drawRect(first, colors[oIdx], THICKNESS, project(H, corners));
+    }
+
+    // show frame
+    imshow("Video OUT", first);
+    waitKey(0);
+
+    int delay = 0;
+    bool quit = false;
+    // for every frame
+    for(int fIdx = 1; (fIdx < src_video.size()) && !quit; fIdx++){
+        // update points
+        vector<vector<Point2f>> prev_frame_pts(next_frame_pts); // deep copy of all arrays
+
+        // for every object
+        Mat frame = src_video[fIdx].clone();
+        for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++){
+            // compute flow
+            vector<uchar> status;
+            vector<float> err;
+            next_frame_pts[oIdx].clear();
+            calcOpticalFlowPyrLK(src_video[fIdx-1], src_video[fIdx], prev_frame_pts[oIdx], next_frame_pts[oIdx],
+                                 status, err, Size(WIN_SIZE), MAX_PYR_LV);
+
+            // remove points not found
+            vector<Point2f> tmp_obj, tmp_frame;
+            for(int i = 0; i < next_frame_pts[oIdx].size(); i++)
+                if(status.at(i) ){
+                    tmp_frame.push_back(next_frame_pts[oIdx][i]);
+                    tmp_obj.push_back(obj_pts[oIdx][i]);
+                }else{
+                    cout<<"Warning: Point "<<i<<" not found by Lukas-Kanade!"<<endl;
+                }
+
+            // update points
+            next_frame_pts[oIdx] = tmp_frame;
+            obj_pts[oIdx] = tmp_obj;
+
+            // find homography
+            vector<char> mask;
+            Mat H = findHomography(obj_pts[oIdx], next_frame_pts[oIdx], RANSAC, THRESHOLD_DYN, mask);
+
+            // refine points with ransac mask
+            vector<Point2f> tmp2_obj, tmp2_frame;
+            for(int i = 0; i < next_frame_pts[oIdx].size(); i++)
+                if(mask[i]){
+                    tmp2_frame.push_back(next_frame_pts[oIdx][i]);
+                    tmp2_obj.push_back(obj_pts[oIdx][i]);
+                }else{
+                    cout<<"Warning: Point "<<i<<" discarded by RANSAC!"<<endl;
+                }
+
+            // update points
+            next_frame_pts[oIdx] = tmp2_frame;
+            obj_pts[oIdx] = tmp2_obj;
+
+            if(next_frame_pts[oIdx].empty()){
+                cout<<"Error: There are no points left to feed Lukas-Kanade!"<<endl;
+                exit(-1);
+            }
+
+            vector<Point2f> corners = extractCorners(cv::Rect2f(two_corners[oIdx][0], two_corners[oIdx][1]));
+            frame = drawRect(frame, colors[oIdx], THICKNESS, project(H, corners));
+        }
+
+        // show frame
+        imshow("Video OUT", frame);
+        switch(waitKey(delay)){
+            case 'q': quit = true; break; // q --> exit
+            case 'f': delay = 0; break; // f--> frame by frame
+            default: delay = FRAMERATE;
+        };
+    }
 }
 
-std::vector<Matching> Tracker::init(){
+std::vector<Matching> Tracker::findFeatures(){
 	vector<Matching> result;
 
 	// extract first frame
@@ -147,107 +236,6 @@ std::vector<Matching> Tracker::init(){
 		obj_counter++;
 	}
 	return result;
-}
-
-std::vector<cv::Mat> Tracker::track(vector<Matching> points_vecs){
-	vector<Mat> video;
-	vector<vector<Point2f>> next_frame_pts(points_vecs.size());
-	vector<vector<Point2f>> obj_pts(points_vecs.size());
-
-	// prepare first frame
-	Mat f = src_video[0].clone();
-	for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++){
-		// initialize points
-		next_frame_pts[oIdx] = points_vecs[oIdx].video_features;
-		obj_pts[oIdx] = points_vecs[oIdx].obj_features;
-
-		// find homography
-		Mat H = findHomography(obj_pts[oIdx], next_frame_pts[oIdx]);
-
-		// compute static corners
-		vector<Point2f> corners = extractCorners(cv::Rect2f(two_corners[oIdx][0], two_corners[oIdx][1]));
-
-		// project corners and draw rectangle
-		f = drawRect(f, colors[oIdx], THICKNESS, project(H, corners));
-	}
-	// save frame
-	video.push_back(f);
-
-	// show frame
-	imshow("Video OUT", f);
-	waitKey(0);
-
-	int delay = 0;
-	bool quit = false;
-	// for every frame
-	for(int fIdx = 1; (fIdx < src_video.size()) && !quit; fIdx++){
-		// update points
-		vector<vector<Point2f>> prev_frame_pts(next_frame_pts); // deep copy of all arrays
-
-		// for every object
-		Mat f = src_video[fIdx].clone();
-		for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++){
-			// compute flow
-	        vector<uchar> status;
-	        vector<float> err;
-	        next_frame_pts[oIdx].clear();
-			calcOpticalFlowPyrLK(src_video[fIdx-1], src_video[fIdx], prev_frame_pts[oIdx], next_frame_pts[oIdx],
-					status, err, Size(WIN_SIZE), MAX_PYR_LV);
-
-			// remove points not found
-			vector<Point2f> tmp_obj, tmp_frame;
-			for(int i = 0; i < next_frame_pts[oIdx].size(); i++)
-				if(status.at(i) ){
-					tmp_frame.push_back(next_frame_pts[oIdx][i]);
-					tmp_obj.push_back(obj_pts[oIdx][i]);
-				}else{
-					cout<<"Warning: Point "<<i<<" not found by Lukas-Kanade!"<<endl;
-				}
-
-			// update points
-			next_frame_pts[oIdx] = tmp_frame;
-			obj_pts[oIdx] = tmp_obj;
-
-			// find homography
-			vector<char> mask;
-			Mat H = findHomography(obj_pts[oIdx], next_frame_pts[oIdx], RANSAC, THRESHOLD_DYN, mask);
-
-			// refine points with ransac mask
-			vector<Point2f> tmp2_obj, tmp2_frame;
-			for(int i = 0; i < next_frame_pts[oIdx].size(); i++)
-				if(mask[i]){
-					tmp2_frame.push_back(next_frame_pts[oIdx][i]);
-					tmp2_obj.push_back(obj_pts[oIdx][i]);
-				}else{
-					cout<<"Warning: Point "<<i<<" discarded by RANSAC!"<<endl;
-				}
-
-			// update points
-			next_frame_pts[oIdx] = tmp2_frame;
-			obj_pts[oIdx] = tmp2_obj;
-
-			if(next_frame_pts[oIdx].empty()){
-				cout<<"Error: There are no points left to feed Lukas-Kanade!"<<endl;
-				exit(-1);
-			}
-
-			vector<Point2f> corners = extractCorners(cv::Rect2f(two_corners[oIdx][0], two_corners[oIdx][1]));
-			f = drawRect(f, colors[oIdx], THICKNESS, project(H, corners));
-		}
-
-		// save frame
-		video.push_back(f);
-
-		// show frame
-		imshow("Video OUT", f);
-		switch(waitKey(delay)){
-		case 'q': quit = true; break; // q --> exit
-		case 'f': delay = 0; break; // f--> frame by frame
-		case ' ': delay = FRAMERATE; // space bar --> reset delay
-		}
-	}
-
-	return video;
 }
 
 cv::Mat drawRect(Mat img, Scalar color, int thickness, Point2f pt1, Point2f pt2, Point2f pt3, Point2f pt4){

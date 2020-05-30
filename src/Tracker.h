@@ -70,11 +70,8 @@ private:
 // functions
 public:
 	Tracker(std::string path_video, std::string path_objs);
-	std::vector<cv::Mat> computeTracking();
+	void showTracking();
 
 private:
-	std::vector<Matching> init();
-	std::vector<cv::Mat> track(std::vector<Matching> t);
-
-
+	std::vector<Matching> findFeatures();
 };
