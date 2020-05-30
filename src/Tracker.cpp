@@ -159,30 +159,8 @@ std::vector<cv::Mat> Tracker::track(vector<Matching> points_vecs){
 	vector<vector<Point2f>> next_frame_pts(points_vecs.size());
 	vector<vector<Point2f>> obj_pts(points_vecs.size());
 
-	// test input (frame)
-	/*
-	int myradius=5;
-	for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++)
-		for (int i=0;i<points_vecs[oIdx].video_features.size();i++)
-			circle(src_video[0],Point(points_vecs[oIdx].video_features[i].x,points_vecs[oIdx].video_features[i].y),
-					myradius,colors[oIdx],-1,8,0);
-	namedWindow("frame keypoints", WINDOW_NORMAL);
-	imshow("frame keypoints", src_video[0]);
-	waitKey(0);
-	// test input (object)
-	for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++){
-		for (int i=0;i<points_vecs[oIdx].video_features.size();i++)
-			circle(obj_img[oIdx], Point(points_vecs[oIdx].obj_features[i].x, points_vecs[oIdx].obj_features[i].y),
-					myradius , colors[oIdx], -1, 8, 0);
-		namedWindow("object keypoints", WINDOW_NORMAL);
-		imshow("object keypoints", obj_img[oIdx]);
-		waitKey(0);
-	}
-
-	*/
-
 	// prepare first frame
-	Mat f = src_video[0];
+	Mat f = src_video[0].clone();
 	for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++){
 		// initialize points
 		next_frame_pts[oIdx] = points_vecs[oIdx].video_features;
@@ -204,15 +182,15 @@ std::vector<cv::Mat> Tracker::track(vector<Matching> points_vecs){
 	imshow("Video OUT", f);
 	waitKey(0);
 
-	int delay = FRAMERATE;
+	int delay = 0;
 	bool quit = false;
 	// for every frame
 	for(int fIdx = 1; (fIdx < src_video.size()) && !quit; fIdx++){
 		// update points
-		vector<vector<Point2f>> prev_frame_pts(next_frame_pts);
+		vector<vector<Point2f>> prev_frame_pts(next_frame_pts); // deep copy of all arrays
 
 		// for every object
-		Mat f = src_video[fIdx];
+		Mat f = src_video[fIdx].clone();
 		for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++){
 			// compute flow
 	        vector<uchar> status;
@@ -223,8 +201,8 @@ std::vector<cv::Mat> Tracker::track(vector<Matching> points_vecs){
 
 			// remove points not found
 			vector<Point2f> tmp_obj, tmp_frame;
-			for(int i = 0; i < next_frame_pts.size(); i++)
-				if(status.at(i)){
+			for(int i = 0; i < next_frame_pts[oIdx].size(); i++)
+				if(status.at(i) ){
 					tmp_frame.push_back(next_frame_pts[oIdx][i]);
 					tmp_obj.push_back(obj_pts[oIdx][i]);
 				}else{
@@ -241,7 +219,7 @@ std::vector<cv::Mat> Tracker::track(vector<Matching> points_vecs){
 
 			// refine points with ransac mask
 			vector<Point2f> tmp2_obj, tmp2_frame;
-			for(int i = 0; i < next_frame_pts.size(); i++)
+			for(int i = 0; i < next_frame_pts[oIdx].size(); i++)
 				if(mask[i]){
 					tmp2_frame.push_back(next_frame_pts[oIdx][i]);
 					tmp2_obj.push_back(obj_pts[oIdx][i]);

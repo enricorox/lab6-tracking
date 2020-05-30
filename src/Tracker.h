@@ -22,7 +22,7 @@
 #define RATIO 2
 // RANSAC
 #define THRESHOLD 1.25
-#define THRESHOLD_DYN 1.25
+#define THRESHOLD_DYN 15
 
 // ORB parameters
 #define N_FEATURE_OBJECT 4500//5000//4800
