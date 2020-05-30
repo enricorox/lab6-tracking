@@ -11,9 +11,6 @@ Tracker::Tracker(std::string path_video, std::string path_objs){
 	cv::utils::fs::glob(path_objs, PATTERN, im_files);
 	for(auto& name : im_files){
 		obj_img.push_back(imread(name));
-		//namedWindow("images", WINDOW_NORMAL);
-		//imshow("images", imread(name));
-		//while(waitKey() != 'n');
 	}
 	cout<<"Read "<<obj_img.size()<<" images."<<endl;
 
@@ -31,8 +28,6 @@ Tracker::Tracker(std::string path_video, std::string path_objs){
 				break;
 			// save frame
 			src_video.push_back(frame);
-			//imshow("Video IN", frame);
-			//waitKey(FRAMERATE);
 		}
 	}
 	cout<<"Read "<<src_video.size()<<" frames."<<endl;
