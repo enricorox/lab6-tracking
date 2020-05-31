@@ -16,21 +16,7 @@ Tracker::Tracker(std::string path_video, std::string path_objs){
 
 	// collect video frame
 	cout<<"Reading video..."<<endl;
-	VideoCapture cap(path_video);
-	if(cap.isOpened()){ // check if we succeeded
-		while(true){
-			// extract frame
-			Mat frame;
-			cap >> frame;
-
-			// exit if video ends
-			if(frame.empty())
-				break;
-			// save frame
-			src_video.push_back(frame);
-		}
-	}
-	cout<<"Read "<<src_video.size()<<" frames."<<endl;
+	cap = VideoCapture(path_video);
 }
 
 void Tracker::showTracking(){
@@ -40,7 +26,8 @@ void Tracker::showTracking(){
     vector<vector<Point2f>> obj_pts(points_vecs.size());
 
     // prepare first frame
-    Mat first = src_video[0].clone();
+    Mat frame = first_frame;
+    Mat prev_frame;
     for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++){
         // initialize points
         next_frame_pts[oIdx] = points_vecs[oIdx].video_features;
@@ -53,35 +40,36 @@ void Tracker::showTracking(){
         vector<Point2f> corners = extractCorners(cv::Rect2f(two_corners[oIdx][0], two_corners[oIdx][1]));
 
         // project corners and draw rectangle
-        first = drawRect(first, colors[oIdx], THICKNESS, project(H, corners));
+        frame = drawRect(frame, colors[oIdx], THICKNESS, project(H, corners));
     }
-
-    // show frame
-    imshow("Video OUT", first);
-    waitKey(FRAMERATE);
-
     int delay = FRAMERATE;
     bool quit = false;
     // for every frame
-    for(int fIdx = 1; (fIdx < src_video.size()) && !quit; fIdx++){
+    while(cap.isOpened() && !quit){
         // update points
         vector<vector<Point2f>> prev_frame_pts(next_frame_pts); // deep copy of all arrays
 
+        // save old frame
+        Mat prev_frame = frame.clone();
+
+        // capture new frame
+        cap >> frame;
+        Mat frame_out = frame.clone();
+
+        // quit if necessary
+        if(frame.empty()) break;
+
         // for every object
-        Mat frame = src_video[fIdx].clone();
         for(int oIdx = 0; oIdx < points_vecs.size(); oIdx++){
             // compute flow
             vector<uchar> status;
             vector<float> err;
-            next_frame_pts[oIdx].clear();
-            calcOpticalFlowPyrLK(src_video[fIdx-1], src_video[fIdx], prev_frame_pts[oIdx], next_frame_pts[oIdx],
+            calcOpticalFlowPyrLK(prev_frame, frame, prev_frame_pts[oIdx], next_frame_pts[oIdx],
                                  status, err, Size(WIN_SIZE), MAX_PYR_LV);
 
-            // update points
+            // refine points with LK status
             next_frame_pts[oIdx] = discardPoints(next_frame_pts[oIdx], toBool(status));
             obj_pts[oIdx] = discardPoints(obj_pts[oIdx], toBool(status));
-
-
 
             // find homography
             vector<char> mask;
@@ -92,11 +80,11 @@ void Tracker::showTracking(){
             obj_pts[oIdx] = discardPoints(obj_pts[oIdx], toBool(mask));
 
             vector<Point2f> corners = extractCorners(cv::Rect2f(two_corners[oIdx][0], two_corners[oIdx][1]));
-            frame = drawRect(frame, colors[oIdx], THICKNESS, project(H, corners));
+            frame_out = drawRect(frame_out, colors[oIdx], THICKNESS, project(H, corners));
         }
 
         // show frame
-        imshow("Video OUT", frame);
+        imshow("Video OUT", frame_out);
         switch(waitKey(delay)){
             case 'q': quit = true; break; // q --> exit
             case 'f': delay = 0; break; // f--> frame by frame
@@ -109,7 +97,8 @@ std::vector<Matching> Tracker::findFeatures(){
 	vector<Matching> result;
 
 	// extract first frame
-	Mat frame = src_video.at(0);
+
+	cap >> first_frame;
 
 	// use orb detector
 	//Ptr<ORB> orb = ORB::create(N_FEATURE_FRAME,SCALE_FACTOR);
@@ -117,9 +106,9 @@ std::vector<Matching> Tracker::findFeatures(){
 
 	// find frame features
 	vector<KeyPoint> frame_keypoints;
-	orb->detect(frame, frame_keypoints);
+	orb->detect(first_frame, frame_keypoints);
 	Mat frame_descriptors;
-	orb->compute(frame, frame_keypoints, frame_descriptors);
+	orb->compute(first_frame, frame_keypoints, frame_descriptors);
 
 	// find object features and matches
 	int obj_counter = 0; // object counter
@@ -197,7 +186,7 @@ std::vector<Matching> Tracker::findFeatures(){
 		// ---draw rect on frame---
 		// project corners
 		vector<Point2f> projected_corners = project(H, corners);
-		Mat frame_rect = drawRect(frame, colors[obj_counter], THICKNESS, projected_corners);
+		Mat frame_rect = drawRect(first_frame, colors[obj_counter], THICKNESS, projected_corners);
 
 		// ---draw matches between frame and object ---
 		Mat drawn_matches_image;
@@ -231,10 +220,6 @@ cv::Mat drawRect(Mat img, Scalar color, int thickness, Point2f pt1, Point2f pt2,
 	line(result, p4, p1, color, thickness);
 
 	return result;
-}
-
-cv::Mat drawRect(Mat img, Scalar color, int thickness, TrackRect t){
-	return drawRect(img, color, thickness, t.p1, t.p2, t.p3, t.p4);
 }
 
 cv::Mat drawRect(Mat img, Scalar color, int thickness, vector<Point2f> points){

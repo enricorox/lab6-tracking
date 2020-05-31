@@ -52,8 +52,6 @@ const cv::Scalar colors[] = { cv::Scalar(RED), cv::Scalar(BLUE),
 
 cv::Mat drawRect(cv::Mat img, cv::Scalar color, int thickness, cv::Point2f pt1, cv::Point2f pt2, cv::Point2f pt3, cv::Point2f pt4);
 
-cv::Mat drawRect(cv::Mat img, cv::Scalar color, int thickness, TrackRect t);
-
 cv::Mat drawRect(cv::Mat img, cv::Scalar color, int thickness, std::vector<cv::Point2f> points);
 
 cv::Point2f project(cv::Mat H, cv::Point2f p);
@@ -71,7 +69,9 @@ std::vector<bool> toBool(std::vector<char> v);
 class Tracker{
 // members
 private:
-	std::vector<cv::Mat> src_video, obj_img;
+	std::vector<cv::Mat> obj_img;
+    cv::VideoCapture cap;
+    cv::Mat first_frame;
 
 // functions
 public:
