@@ -62,6 +62,12 @@ std::vector<cv::Point2f> project(cv::Mat H, std::vector<cv::Point2f> vecs);
 
 std::vector<cv::Point2f> extractCorners(cv::Rect2f r);
 
+std::vector<cv::Point2f> discardPoints(std::vector<cv::Point2f> points, std::vector<bool> mask, int idx=-1);
+
+std::vector<bool> toBool(std::vector<uchar> vec);
+
+std::vector<bool> toBool(std::vector<char> v);
+
 class Tracker{
 // members
 private:

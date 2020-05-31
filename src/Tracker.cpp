@@ -58,9 +58,9 @@ void Tracker::showTracking(){
 
     // show frame
     imshow("Video OUT", first);
-    waitKey(0);
+    waitKey(FRAMERATE);
 
-    int delay = 0;
+    int delay = FRAMERATE;
     bool quit = false;
     // for every frame
     for(int fIdx = 1; (fIdx < src_video.size()) && !quit; fIdx++){
@@ -77,42 +77,19 @@ void Tracker::showTracking(){
             calcOpticalFlowPyrLK(src_video[fIdx-1], src_video[fIdx], prev_frame_pts[oIdx], next_frame_pts[oIdx],
                                  status, err, Size(WIN_SIZE), MAX_PYR_LV);
 
-            // remove points not found
-            vector<Point2f> tmp_obj, tmp_frame;
-            for(int i = 0; i < next_frame_pts[oIdx].size(); i++)
-                if(status.at(i) ){
-                    tmp_frame.push_back(next_frame_pts[oIdx][i]);
-                    tmp_obj.push_back(obj_pts[oIdx][i]);
-                }else{
-                    cout<<"Warning: Point "<<i<<" not found by Lukas-Kanade!"<<endl;
-                }
-
             // update points
-            next_frame_pts[oIdx] = tmp_frame;
-            obj_pts[oIdx] = tmp_obj;
+            next_frame_pts[oIdx] = discardPoints(next_frame_pts[oIdx], toBool(status));
+            obj_pts[oIdx] = discardPoints(obj_pts[oIdx], toBool(status));
+
+
 
             // find homography
             vector<char> mask;
             Mat H = findHomography(obj_pts[oIdx], next_frame_pts[oIdx], RANSAC, THRESHOLD_DYN, mask);
 
             // refine points with ransac mask
-            vector<Point2f> tmp2_obj, tmp2_frame;
-            for(int i = 0; i < next_frame_pts[oIdx].size(); i++)
-                if(mask[i]){
-                    tmp2_frame.push_back(next_frame_pts[oIdx][i]);
-                    tmp2_obj.push_back(obj_pts[oIdx][i]);
-                }else{
-                    cout<<"Warning: Point "<<i<<" discarded by RANSAC!"<<endl;
-                }
-
-            // update points
-            next_frame_pts[oIdx] = tmp2_frame;
-            obj_pts[oIdx] = tmp2_obj;
-
-            if(next_frame_pts[oIdx].empty()){
-                cout<<"Error: There are no points left to feed Lukas-Kanade!"<<endl;
-                exit(-1);
-            }
+            next_frame_pts[oIdx] = discardPoints(next_frame_pts[oIdx], toBool(mask));
+            obj_pts[oIdx] = discardPoints(obj_pts[oIdx], toBool(mask));
 
             vector<Point2f> corners = extractCorners(cv::Rect2f(two_corners[oIdx][0], two_corners[oIdx][1]));
             frame = drawRect(frame, colors[oIdx], THICKNESS, project(H, corners));
@@ -135,7 +112,8 @@ std::vector<Matching> Tracker::findFeatures(){
 	Mat frame = src_video.at(0);
 
 	// use orb detector
-	Ptr<ORB> orb = ORB::create(N_FEATURE_FRAME,SCALE_FACTOR);
+	//Ptr<ORB> orb = ORB::create(N_FEATURE_FRAME,SCALE_FACTOR);
+    Ptr<ORB> orb = ORB::create(N_FEATURE_FRAME);
 
 	// find frame features
 	vector<KeyPoint> frame_keypoints;
@@ -146,7 +124,8 @@ std::vector<Matching> Tracker::findFeatures(){
 	// find object features and matches
 	int obj_counter = 0; // object counter
 	for(auto& obj : obj_img){
-		orb = ORB::create(N_FEATURE_OBJECT);
+		//orb = ORB::create(N_FEATURE_OBJECT);
+        orb = ORB::create(N_FEATURE_OBJECT, SCALE_FACTOR);
 
 		// compute keypoints
 		vector<KeyPoint> obj_keypoints;
@@ -197,16 +176,14 @@ std::vector<Matching> Tracker::findFeatures(){
 		cout<<"Number of matches with object "<<obj_counter<<": "<<points.obj_features.size()<<endl;
 
 		// find homography
-		Mat H, mask;
+		Mat H;
+		vector<char> mask;
 		H = findHomography(points.obj_features, points.video_features, RANSAC, THRESHOLD, mask);
 
 		// refine matches with RANSAC mask
 		Matching good_matches;
-		for(int i = 0; i < points.obj_features.size(); i++)
-			if(mask.at<bool>(i)){
-				good_matches.obj_features.push_back(points.obj_features.at(i));
-				good_matches.video_features.push_back(points.video_features.at(i));
-			}
+		good_matches.obj_features = discardPoints(points.obj_features, toBool(mask), obj_counter);
+        good_matches.video_features = discardPoints(points.video_features, toBool(mask), obj_counter);
 		cout<<"Saved only "<<good_matches.obj_features.size()<<" matches"<<endl;
 
 		// save points
@@ -222,7 +199,7 @@ std::vector<Matching> Tracker::findFeatures(){
 		vector<Point2f> projected_corners = project(H, corners);
 		Mat frame_rect = drawRect(frame, colors[obj_counter], THICKNESS, projected_corners);
 
-		// draw matches
+		// ---draw matches between frame and object ---
 		Mat drawn_matches_image;
 		drawMatches(obj_rect, obj_keypoints, frame_rect, frame_keypoints, matches,
 				drawn_matches_image, Scalar::all(-1), Scalar::all(-1), mask);
@@ -239,14 +216,14 @@ std::vector<Matching> Tracker::findFeatures(){
 }
 
 cv::Mat drawRect(Mat img, Scalar color, int thickness, Point2f pt1, Point2f pt2, Point2f pt3, Point2f pt4){
-	Mat result;
-	img.copyTo(result);
+	Mat result = img.clone();
 
 	// convert to Point2i
 	Point2i p1 = static_cast<Point2i>(pt1);
 	Point2i p2 = static_cast<Point2i>(pt2);
 	Point2i p3 = static_cast<Point2i>(pt3);
 	Point2i p4 = static_cast<Point2i>(pt4);
+
 	// draw lines
 	line(result, p1, p2, color, thickness);
 	line(result, p2, p3, color, thickness);
@@ -277,6 +254,7 @@ Point2f project(Mat H, Point2f p){
 
 	// matrix multiplication
 	Mat mul = H*q;
+
 	//cout<<"Projected point:"<<endl<<mul<<endl<<endl;
 
 	// discard last component (should be 1)
@@ -302,4 +280,41 @@ vector<Point2f> extractCorners(Rect2f r){
 	Point2f p4(r.x + r.width, r.y);
 
 	return {p1,p2,p3,p4};
+}
+
+std::vector<cv::Point2f> discardPoints(std::vector<cv::Point2f> points, std::vector<bool> mask, int idx){
+    if(points.size() != mask.size()){
+        cout<<"Error: vector and its mask must have same dimensions!"<<endl;
+        exit(-1);
+    }
+
+    vector<Point2f> result;
+    for(int i = 0; i < points.size(); i++)
+        if(mask[i])
+            result.push_back(points[i]);
+
+    if(points.size() != result.size()){
+        if(result.empty()) {
+            cout << "Error: all points has been discarded"
+                 << ((idx > -1) ? " from object " + to_string(idx) : ".") << endl;
+            exit(-1);
+        } else
+            cout << "Warning: Discarded " <<points.size() - result.size() << " points"
+                 << ((idx > -1) ? " from object " + to_string(idx) : ".") << endl;
+    }
+    return result;
+}
+
+std::vector<bool> toBool(vector<char> v){
+    vector<bool> r;
+    for(auto& e : v)
+        r.push_back((e) ? true : false);
+    return r;
+}
+
+std::vector<bool> toBool(vector<uchar> v){
+    vector<bool> r;
+    for(auto& e : v)
+        r.push_back((e) ? true : false);
+    return r;
 }
