@@ -56,7 +56,7 @@ void Tracker::showTracking(){
         cap >> frame;
         Mat frame_out = frame.clone();
 
-        // quit if necessary
+        // quit if end of video
         if(frame.empty()) break;
 
         // for every object
@@ -97,12 +97,10 @@ std::vector<Matching> Tracker::findFeatures(){
 	vector<Matching> result;
 
 	// extract first frame
-
 	cap >> first_frame;
 
 	// use orb detector
-	//Ptr<ORB> orb = ORB::create(N_FEATURE_FRAME,SCALE_FACTOR);
-    Ptr<ORB> orb = ORB::create(N_FEATURE_FRAME);
+	Ptr<ORB> orb = ORB::create(N_FEATURE_FRAME);
 
 	// find frame features
 	vector<KeyPoint> frame_keypoints;
@@ -113,8 +111,8 @@ std::vector<Matching> Tracker::findFeatures(){
 	// find object features and matches
 	int obj_counter = 0; // object counter
 	for(auto& obj : obj_img){
-		//orb = ORB::create(N_FEATURE_OBJECT);
-        orb = ORB::create(N_FEATURE_OBJECT, SCALE_FACTOR);
+		orb = ORB::create(N_FEATURE_OBJECT);
+        //orb = ORB::create(N_FEATURE_OBJECT, SCALE_FACTOR);
 
 		// compute keypoints
 		vector<KeyPoint> obj_keypoints;
@@ -154,10 +152,11 @@ std::vector<Matching> Tracker::findFeatures(){
 			int objIdx = v.at(0).queryIdx;
 			int frameIdx = v.at(0).trainIdx;
 
-			// find points for homography
+			// save points of object
 			Point2f obj_p = obj_keypoints.at(objIdx).pt;
 			points.obj_features.push_back(obj_p);
 
+			// save points of frame
 			Point2f frame_p = frame_keypoints.at(frameIdx).pt;
 			points.video_features.push_back(frame_p);
 		}
@@ -226,12 +225,13 @@ cv::Mat drawRect(Mat img, Scalar color, int thickness, vector<Point2f> points){
 	return drawRect(img, color, thickness, points[0], points[1], points[2], points[3]);
 }
 
+
 Point2f project(Mat H, Point2f p){
 	if(H.empty()){
 		cout<<"Homography matrix is empty!"<<endl;
 		exit(-1);
 	}
-	// add one component
+	// convert to homogeneous coordinates
 	Vec3f q(p.x, p.y, 1);
 
 	// convert to floating point
@@ -242,15 +242,22 @@ Point2f project(Mat H, Point2f p){
 
 	//cout<<"Projected point:"<<endl<<mul<<endl<<endl;
 
-	// discard last component (should be 1)
+	// convert back to cartesian coordinates
 	Point2f result = Point2f(
-			(int) mul.at<float>(0,0),
-			(int) mul.at<float>(0,1)
+			mul.at<float>(0,0) / mul.at<float>(0,2),
+			mul.at<float>(0,1) / mul.at<float>(0,2)
 	);
 
 	return result;
 }
 
+/*
+Point2f project(Mat H, _InputArray p){
+    Point2f res;
+    perspectiveTransform(p, res, H);
+    return res;
+}
+*/
 vector<Point2f> project(Mat H, vector<Point2f> vecs){
 	vector<Point2f> result;
 	for(auto& v : vecs)

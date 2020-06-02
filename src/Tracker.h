@@ -28,8 +28,10 @@
 #define THRESHOLD_DYN 15
 
 // ORB parameters
-#define N_FEATURE_OBJECT 4500//5000//4800
-#define N_FEATURE_FRAME 10000//20000//37500
+//#define N_FEATURE_OBJECT 4500
+#define N_FEATURE_OBJECT 9000
+//#define N_FEATURE_FRAME 10000
+#define N_FEATURE_FRAME 100000
 #define SCALE_FACTOR 2
 
 // Lukas-Kanade parameters
